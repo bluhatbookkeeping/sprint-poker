@@ -1,0 +1,499 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Sprint Poker 🃏</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body,#root{height:100%;font-family:Georgia,serif}
+  body{background:radial-gradient(ellipse at center,#0d3320 0%,#060f0a 100%);min-height:100vh}
+  .card-flip{perspective:600px}
+  .card-inner{transform-style:preserve-3d;transition:transform 0.6s cubic-bezier(.4,2,.6,1);width:100%;height:100%;position:relative}
+  .card-inner.flipped{transform:rotateY(180deg)}
+  .card-face{backface-visibility:hidden;position:absolute;inset:0;border-radius:8px;display:flex;align-items:center;justify-content:center}
+  .card-back{background:linear-gradient(135deg,#1e3a5f,#2d5a8e);border:2px solid #60a5fa}
+  .card-back.selected{border-color:#facc15;box-shadow:0 0 12px rgba(250,204,21,0.5)}
+  .card-front{background:white;border:2px solid #facc15;transform:rotateY(180deg)}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.5}}
+  .pulse{animation:pulse 2s infinite}
+  .btn{cursor:pointer;border:none;outline:none;font-family:Georgia,serif}
+  input{font-family:Georgia,serif;outline:none}
+  ::-webkit-scrollbar{width:6px}
+  ::-webkit-scrollbar-track{background:transparent}
+  ::-webkit-scrollbar-thumb{background:#ffffff30;border-radius:3px}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const {useState,useEffect,useCallback} = React;
+
+const FIBONACCI = [1,2,3,5,8,13,21,"?"];
+const MALE_AVATARS = ["👨","👨‍💻","🧔","👨‍🦱","👨‍🦳"];
+const FEMALE_AVATARS = ["👩","👩‍💻","👩‍🦱","👩‍🦳","🧕"];
+
+const ls = {
+  get:(k)=>{try{return JSON.parse(localStorage.getItem(k))}catch{return null}},
+  set:(k,v)=>{try{localStorage.setItem(k,JSON.stringify(v))}catch{}}
+};
+
+const seatPositions=(count)=>{
+  const p=[];
+  for(let i=0;i<count;i++){
+    const angle=(i/count)*2*Math.PI-Math.PI/2;
+    p.push({left:`${50+40*Math.cos(angle)}%`,top:`${50+33*Math.sin(angle)}%`});
+  }
+  return p;
+};
+
+function PlayingCard({value,flipped,size,onClick,selected}){
+  const w=size==="sm"?"32px":size==="lg"?"64px":"48px";
+  const h=size==="sm"?"48px":size==="lg"?"96px":"64px";
+  const fs=size==="sm"?"11px":size==="lg"?"22px":"15px";
+  return(
+    <div className="card-flip" style={{width:w,height:h,cursor:"pointer"}} onClick={onClick}>
+      <div className={`card-inner${flipped?" flipped":""}`}>
+        <div className={`card-face card-back${selected?" selected":""}`}>
+          <span style={{fontSize:size==="sm"?"10px":"14px"}}>🂠</span>
+        </div>
+        <div className="card-face card-front">
+          <span style={{fontWeight:900,fontSize:fs,color:"#1f2937"}}>{value}</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function PlayerSeat({player,revealed,isCurrentUser}){
+  return(
+    <div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:4,minWidth:70}}>
+      <div style={{position:"relative",fontSize:32,opacity:!player.voted&&!revealed?0.5:1,transition:"opacity 0.3s"}}>
+        {player.avatar}
+        {player.voted&&!revealed&&(
+          <span style={{position:"absolute",top:-4,right:-4,background:"#22c55e",borderRadius:"50%",width:16,height:16,display:"flex",alignItems:"center",justifyContent:"center",fontSize:10}}>✓</span>
+        )}
+        {isCurrentUser&&(
+          <span style={{position:"absolute",bottom:-4,right:-4,background:"#3b82f6",borderRadius:"50%",width:16,height:16,display:"flex",alignItems:"center",justifyContent:"center",color:"white",fontSize:7}}>YOU</span>
+        )}
+      </div>
+      <span style={{color:"white",fontSize:11,fontWeight:600,textAlign:"center",textShadow:"0 1px 3px rgba(0,0,0,0.8)",maxWidth:64,wordBreak:"break-word",lineHeight:1.2}}>{player.name}</span>
+      {player.voted||revealed?(
+        <PlayingCard value={player.vote} flipped={revealed} size="sm"/>
+      ):(
+        <div style={{width:32,height:48,borderRadius:6,border:"1px solid rgba(255,255,255,0.2)",background:"rgba(255,255,255,0.05)",display:"flex",alignItems:"center",justifyContent:"center"}}>
+          <span style={{color:"rgba(255,255,255,0.3)",fontSize:12}}>?</span>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Results({players,onFinalPoint,storyNum}){
+  const votes=players.filter(p=>p.vote!==null&&p.vote!=="?").map(p=>Number(p.vote));
+  const avg=votes.length?(votes.reduce((a,b)=>a+b,0)/votes.length).toFixed(1):"N/A";
+  const min=votes.length?Math.min(...votes):"N/A";
+  const max=votes.length?Math.max(...votes):"N/A";
+  const spread=votes.length?max-min:0;
+  const [chosen,setChosen]=useState(null);
+  const quip=()=>{
+    if(spread===0)return"🎯 Perfect consensus! The team is aligned.";
+    if(spread>=13)return"🌪️ Wild disagreement! Time for a deep dive.";
+    if(spread>=8)return"🤔 Big spread — someone sees complexity others don't.";
+    if(spread>=5)return"💬 Some divergence — worth a quick chat.";
+    return"✅ Pretty close! Easy decision ahead.";
+  };
+  return(
+    <div style={{background:"rgba(0,0,0,0.5)",backdropFilter:"blur(8px)",borderRadius:16,padding:20,border:"1px solid rgba(250,204,21,0.3)",color:"white",maxWidth:360,width:"100%",margin:"0 auto"}}>
+      <div style={{textAlign:"center",marginBottom:16}}>
+        <div style={{color:"#facc15",fontWeight:700,fontSize:13,marginBottom:4}}>STORY #{storyNum} RESULTS</div>
+        <div style={{fontSize:12,color:"rgba(255,255,255,0.6)",fontStyle:"italic"}}>{quip()}</div>
+      </div>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:12,marginBottom:16,textAlign:"center"}}>
+        {[["AVG",avg],["LOW",min],["HIGH",max]].map(([label,val])=>(
+          <div key={label} style={{background:"rgba(255,255,255,0.1)",borderRadius:8,padding:8}}>
+            <div style={{color:"#facc15",fontSize:11,fontWeight:700}}>{label}</div>
+            <div style={{fontSize:22,fontWeight:900}}>{val}</div>
+          </div>
+        ))}
+      </div>
+      <div style={{marginBottom:16}}>
+        <div style={{fontSize:11,color:"rgba(255,255,255,0.6)",marginBottom:8,textAlign:"center",textTransform:"uppercase",letterSpacing:"0.05em"}}>SELECT FINAL POINTS</div>
+        <div style={{display:"flex",flexWrap:"wrap",gap:8,justifyContent:"center"}}>
+          {FIBONACCI.map(v=>(
+            <button key={v} className="btn" onClick={()=>setChosen(v)}
+              style={{width:40,height:40,borderRadius:8,fontWeight:700,fontSize:13,transition:"all 0.2s",
+                background:chosen===v?"#facc15":"rgba(255,255,255,0.1)",
+                color:chosen===v?"black":"white",
+                transform:chosen===v?"scale(1.1)":"scale(1)"}}>
+              {v}
+            </button>
+          ))}
+        </div>
+      </div>
+      <button className="btn" disabled={chosen===null} onClick={()=>chosen!==null&&onFinalPoint(chosen)}
+        style={{width:"100%",padding:"10px 0",borderRadius:12,fontWeight:700,fontSize:13,
+          background:chosen===null?"rgba(34,197,94,0.3)":"#22c55e",
+          color:"white",cursor:chosen===null?"not-allowed":"pointer",transition:"all 0.2s"}}>
+        ✅ Lock In {chosen!==null?chosen:"—"} Points & Next Story
+      </button>
+    </div>
+  );
+}
+
+function JoinScreen({onJoin,savedProfile}){
+  const [name,setName]=useState(savedProfile?.name||"");
+  const [gender,setGender]=useState(savedProfile?.gender||"male");
+  const [avatarIdx,setAvatarIdx]=useState(savedProfile?.avatarIdx??0);
+  const avatars=gender==="male"?MALE_AVATARS:FEMALE_AVATARS;
+  return(
+    <div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",padding:16}}>
+      <div style={{background:"rgba(0,0,0,0.5)",backdropFilter:"blur(8px)",border:"1px solid rgba(250,204,21,0.3)",borderRadius:24,padding:32,width:"100%",maxWidth:360,color:"white",boxShadow:"0 25px 50px rgba(0,0,0,0.5)"}}>
+        <div style={{textAlign:"center",marginBottom:24}}>
+          <div style={{fontSize:40,marginBottom:8}}>🃏</div>
+          <h1 style={{fontSize:24,fontWeight:900,color:"#facc15",letterSpacing:"0.02em"}}>Sprint Poker</h1>
+          <p style={{color:"rgba(255,255,255,0.5)",fontSize:13,marginTop:4}}>Take your seat at the table</p>
+        </div>
+        {savedProfile&&(
+          <div style={{background:"rgba(34,197,94,0.1)",border:"1px solid rgba(34,197,94,0.3)",borderRadius:12,padding:12,marginBottom:16,textAlign:"center",fontSize:13,color:"#86efac"}}>
+            👋 Welcome back, {savedProfile.name}!
+          </div>
+        )}
+        <div style={{display:"flex",flexDirection:"column",gap:16}}>
+          <div>
+            <label style={{fontSize:11,color:"rgba(255,255,255,0.6)",textTransform:"uppercase",letterSpacing:"0.05em",display:"block",marginBottom:4}}>Your Name</label>
+            <input value={name} onChange={e=>setName(e.target.value)} placeholder="Enter your name..."
+              style={{width:"100%",background:"rgba(255,255,255,0.1)",border:"1px solid rgba(255,255,255,0.2)",borderRadius:12,padding:"10px 16px",color:"white",fontSize:14}}/>
+          </div>
+          <div>
+            <label style={{fontSize:11,color:"rgba(255,255,255,0.6)",textTransform:"uppercase",letterSpacing:"0.05em",display:"block",marginBottom:8}}>Avatar</label>
+            <div style={{display:"flex",gap:8,marginBottom:12}}>
+              {["male","female"].map(g=>(
+                <button key={g} className="btn" onClick={()=>{setGender(g);setAvatarIdx(0)}}
+                  style={{flex:1,padding:"8px 0",borderRadius:12,fontSize:13,fontWeight:600,transition:"all 0.2s",
+                    background:gender===g?"#facc15":"rgba(255,255,255,0.1)",
+                    color:gender===g?"black":"white"}}>
+                  {g==="male"?"👨 Male":"👩 Female"}
+                </button>
+              ))}
+            </div>
+            <div style={{display:"flex",gap:8,justifyContent:"center"}}>
+              {avatars.map((a,i)=>(
+                <button key={i} className="btn" onClick={()=>setAvatarIdx(i)}
+                  style={{fontSize:24,padding:6,borderRadius:12,transition:"all 0.2s",
+                    background:avatarIdx===i?"rgba(250,204,21,0.3)":"transparent",
+                    transform:avatarIdx===i?"scale(1.25)":"scale(1)",
+                    outline:avatarIdx===i?"2px solid #facc15":"none"}}>
+                  {a}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div style={{textAlign:"center",fontSize:36,padding:"8px 0"}}>{avatars[avatarIdx]}</div>
+          <button className="btn" disabled={!name.trim()}
+            onClick={()=>onJoin({name:name.trim(),gender,avatarIdx,avatar:avatars[avatarIdx]})}
+            style={{width:"100%",padding:"12px 0",borderRadius:12,fontWeight:900,color:"black",fontSize:13,
+              letterSpacing:"0.05em",background:name.trim()?"#facc15":"rgba(250,204,21,0.3)",
+              cursor:name.trim()?"pointer":"not-allowed",
+              boxShadow:name.trim()?"0 0 20px rgba(250,204,21,0.3)":"none",transition:"all 0.2s"}}>
+            🎲 TAKE MY SEAT
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function HistoryScreen({history,onClose}){
+  return(
+    <div style={{minHeight:"100vh",padding:24,overflowAuto:"auto"}}>
+      <div style={{maxWidth:640,margin:"0 auto"}}>
+        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:24}}>
+          <h2 style={{color:"#facc15",fontSize:22,fontWeight:900}}>📊 Sprint History</h2>
+          <button className="btn" onClick={onClose}
+            style={{color:"rgba(255,255,255,0.6)",fontSize:13,border:"1px solid rgba(255,255,255,0.2)",padding:"6px 12px",borderRadius:8,background:"transparent",cursor:"pointer"}}>
+            ← Back
+          </button>
+        </div>
+        {history.length===0?(
+          <div style={{textAlign:"center",color:"rgba(255,255,255,0.4)",paddingTop:80}}>No sessions yet. Complete a refinement to see history!</div>
+        ):(
+          <div style={{display:"flex",flexDirection:"column",gap:16}}>
+            {history.slice().reverse().map((session,i)=>{
+              const total=session.stories.reduce((s,st)=>s+(Number(st.finalPoint)||0),0);
+              const avg=session.stories.length?(total/session.stories.length).toFixed(1):0;
+              return(
+                <div key={i} style={{background:"rgba(0,0,0,0.4)",border:"1px solid rgba(250,204,21,0.2)",borderRadius:16,padding:20,color:"white"}}>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:12}}>
+                    <div>
+                      <div style={{color:"#facc15",fontWeight:700}}>{session.date}</div>
+                      <div style={{color:"rgba(255,255,255,0.5)",fontSize:13}}>{session.stories.length} stories · {session.players?.join(", ")}</div>
+                    </div>
+                    <div style={{textAlign:"right"}}>
+                      <div style={{fontSize:20,fontWeight:900}}>{total} pts</div>
+                      <div style={{color:"rgba(255,255,255,0.4)",fontSize:12}}>avg {avg}/story</div>
+                    </div>
+                  </div>
+                  <div style={{display:"flex",flexDirection:"column",gap:6}}>
+                    {session.stories.map((s,j)=>(
+                      <div key={j} style={{display:"flex",justifyContent:"space-between",fontSize:13,background:"rgba(255,255,255,0.05)",borderRadius:8,padding:"6px 12px"}}>
+                        <span style={{color:"rgba(255,255,255,0.7)"}}>Story #{j+1}</span>
+                        <div style={{display:"flex",gap:12,color:"rgba(255,255,255,0.5)",fontSize:12}}>
+                          <span>votes: {s.votes?.join(", ")}</span>
+                          <span style={{color:"#facc15",fontWeight:700}}>→ {s.finalPoint} pts</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function App(){
+  const [screen,setScreen]=useState("join");
+  const [myProfile,setMyProfile]=useState(null);
+  const [players,setPlayers]=useState([]);
+  const [phase,setPhase]=useState("waiting");
+  const [storyNum,setStoryNum]=useState(1);
+  const [currentSession,setCurrentSession]=useState({stories:[],startedAt:null});
+  const [history,setHistory]=useState([]);
+  const [isFacilitator,setIsFacilitator]=useState(false);
+
+  useEffect(()=>{
+    const saved=ls.get("sp_profile");
+    const savedHistory=ls.get("sp_history")||[];
+    const savedPlayers=ls.get("sp_players")||[];
+    const savedPhase=ls.get("sp_phase");
+    const savedStoryNum=ls.get("sp_storyNum");
+    setHistory(savedHistory);
+    if(saved){
+      setMyProfile(saved);
+      if(savedPlayers.length>0){setPlayers(savedPlayers);setScreen("table");}
+    }
+    if(savedPhase)setPhase(savedPhase);
+    if(savedStoryNum)setStoryNum(savedStoryNum);
+  },[]);
+
+  const saveState=useCallback((p,ph,sn)=>{
+    ls.set("sp_players",p);ls.set("sp_phase",ph);ls.set("sp_storyNum",sn);
+  },[]);
+
+  const handleJoin=(profile)=>{
+    ls.set("sp_profile",profile);setMyProfile(profile);
+    const existing=ls.get("sp_players")||[];
+    const alreadyIn=existing.find(p=>p.name===profile.name);
+    const updated=alreadyIn?existing.map(p=>p.name===profile.name?{...p,...profile}:p):[...existing,{...profile,vote:null,voted:false}];
+    setPlayers(updated);ls.set("sp_players",updated);setScreen("table");
+  };
+
+  const handleVote=(value)=>{
+    if(phase!=="voting")return;
+    const updated=players.map(p=>p.name===myProfile?.name?{...p,vote:value,voted:true}:p);
+    setPlayers(updated);saveState(updated,phase,storyNum);
+  };
+
+  const startVoting=()=>{
+    const updated=players.map(p=>({...p,vote:null,voted:false}));
+    setPlayers(updated);setPhase("voting");saveState(updated,"voting",storyNum);
+    if(!currentSession.startedAt)setCurrentSession(s=>({...s,startedAt:new Date().toLocaleDateString()}));
+  };
+
+  const revealVotes=()=>{setPhase("revealed");saveState(players,"revealed",storyNum);};
+
+  const handleFinalPoint=(points)=>{
+    const story={votes:players.filter(p=>p.voted).map(p=>p.vote),finalPoint:points};
+    setCurrentSession(s=>({...s,stories:[...s.stories,story]}));
+    const next=storyNum+1;
+    const updated=players.map(p=>({...p,vote:null,voted:false}));
+    setPlayers(updated);setPhase("waiting");setStoryNum(next);saveState(updated,"waiting",next);
+  };
+
+  const endSession=()=>{
+    if(currentSession.stories.length===0)return;
+    const record={
+      date:new Date().toLocaleDateString("en-US",{weekday:"short",month:"short",day:"numeric"}),
+      players:players.map(p=>p.name),stories:currentSession.stories
+    };
+    const newHistory=[...history,record];
+    setHistory(newHistory);ls.set("sp_history",newHistory);
+    setCurrentSession({stories:[],startedAt:null});setStoryNum(1);
+    const reset=players.map(p=>({...p,vote:null,voted:false}));
+    setPlayers(reset);setPhase("waiting");saveState(reset,"waiting",1);
+    alert(`✅ Session saved! ${record.stories.length} stories, ${record.stories.reduce((s,st)=>s+(Number(st.finalPoint)||0),0)} total points.`);
+  };
+
+  const removePlayer=(name)=>{
+    const updated=players.filter(p=>p.name!==name);
+    setPlayers(updated);saveState(updated,phase,storyNum);
+  };
+
+  const myVote=players.find(p=>p.name===myProfile?.name)?.vote;
+  const allVoted=players.length>0&&players.every(p=>p.voted);
+  const positions=seatPositions(players.length);
+
+  if(screen==="history")return<HistoryScreen history={history} onClose={()=>setScreen("table")}/>;
+  if(screen==="join")return<JoinScreen onJoin={handleJoin} savedProfile={ls.get("sp_profile")}/>;
+
+  return(
+    <div style={{minHeight:"100vh",display:"flex",flexDirection:"column"}}>
+      {/* Header */}
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"12px 24px",borderBottom:"1px solid rgba(255,255,255,0.1)"}}>
+        <div style={{display:"flex",alignItems:"center",gap:12}}>
+          <span style={{fontSize:24}}>🃏</span>
+          <div>
+            <h1 style={{color:"#facc15",fontWeight:900,fontSize:18,lineHeight:1}}>Sprint Poker</h1>
+            <p style={{color:"rgba(255,255,255,0.4)",fontSize:11}}>Story #{storyNum}</p>
+          </div>
+        </div>
+        <div style={{display:"flex",alignItems:"center",gap:8}}>
+          {currentSession.stories.length>0&&(
+            <span style={{color:"rgba(255,255,255,0.5)",fontSize:12}}>{currentSession.stories.length} done</span>
+          )}
+          <button className="btn" onClick={()=>setScreen("history")}
+            style={{color:"rgba(255,255,255,0.6)",fontSize:12,border:"1px solid rgba(255,255,255,0.2)",padding:"6px 12px",borderRadius:8,background:"transparent",cursor:"pointer"}}>
+            📊 History
+          </button>
+          <button className="btn" onClick={()=>setIsFacilitator(!isFacilitator)}
+            style={{fontSize:12,border:`1px solid ${isFacilitator?"rgba(250,204,21,0.6)":"rgba(255,255,255,0.2)"}`,
+              padding:"6px 12px",borderRadius:8,background:"transparent",cursor:"pointer",
+              color:isFacilitator?"#facc15":"rgba(255,255,255,0.6)"}}>
+            {isFacilitator?"👑 Facilitator":"🎮 Player"}
+          </button>
+          <button className="btn" onClick={()=>{ls.set("sp_profile",null);setScreen("join");}}
+            style={{color:"rgba(255,255,255,0.4)",fontSize:12,border:"1px solid rgba(255,255,255,0.1)",padding:"6px 8px",borderRadius:8,background:"transparent",cursor:"pointer"}}>
+            ↩
+          </button>
+        </div>
+      </div>
+
+      <div style={{flex:1,display:"flex",gap:16,padding:16,overflow:"hidden"}}>
+        {/* Table */}
+        <div style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center"}}>
+          <div style={{position:"relative",width:"min(560px,90vw)",height:"min(380px,55vw)"}}>
+            {/* Felt */}
+            <div style={{position:"absolute",inset:0,borderRadius:"50%",
+              background:"radial-gradient(ellipse at 40% 40%,#2a7a44,#1a5c2e 70%,#0f3d1e)",
+              border:"4px solid rgba(120,80,20,0.6)",
+              boxShadow:"0 0 60px rgba(0,0,0,0.8),inset 0 2px 8px rgba(255,255,255,0.05)"}}/>
+            <div style={{position:"absolute",inset:-4,borderRadius:"50%",border:"8px solid rgba(120,80,20,0.4)"}}/>
+
+            {/* Center dealer */}
+            <div style={{position:"absolute",inset:0,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",zIndex:10,gap:4}}>
+              <div style={{fontSize:36}}>{myProfile?.gender==="female"?"👩‍💼":"👨‍💼"}</div>
+              <span style={{color:"#facc15",fontSize:11,fontWeight:700}}>DEALER</span>
+              {phase==="waiting"&&isFacilitator&&(
+                <button className="btn pulse" onClick={startVoting}
+                  style={{marginTop:4,background:"#facc15",color:"black",fontSize:11,fontWeight:900,
+                    padding:"6px 16px",borderRadius:999,cursor:"pointer",
+                    boxShadow:"0 0 20px rgba(250,204,21,0.3)"}}>
+                  🎲 DEAL
+                </button>
+              )}
+              {phase==="voting"&&isFacilitator&&(
+                <button className="btn" onClick={revealVotes} disabled={!allVoted}
+                  style={{marginTop:4,fontSize:11,fontWeight:900,padding:"6px 16px",borderRadius:999,cursor:allVoted?"pointer":"not-allowed",
+                    background:allVoted?"#ef4444":"rgba(239,68,68,0.3)",color:"white",
+                    boxShadow:allVoted?"0 0 20px rgba(239,68,68,0.3)":"none"}}>
+                  {allVoted?"🔍 REVEAL":`⏳ ${players.filter(p=>p.voted).length}/${players.length}`}
+                </button>
+              )}
+              {phase==="voting"&&!isFacilitator&&(
+                <div style={{color:"rgba(255,255,255,0.5)",fontSize:11,marginTop:4}}>
+                  {allVoted?"All voted!":`${players.filter(p=>p.voted).length}/${players.length} voted`}
+                </div>
+              )}
+            </div>
+
+            {/* Players */}
+            {players.map((player,i)=>(
+              <div key={player.name} style={{position:"absolute",zIndex:20,left:positions[i]?.left,top:positions[i]?.top,transform:"translate(-50%,-50%)"}}>
+                <div style={{position:"relative"}}>
+                  <PlayerSeat player={player} revealed={phase==="revealed"} isCurrentUser={player.name===myProfile?.name}/>
+                  {isFacilitator&&player.name!==myProfile?.name&&(
+                    <button className="btn" onClick={()=>removePlayer(player.name)}
+                      style={{position:"absolute",top:-8,right:-8,width:16,height:16,background:"#ef4444",borderRadius:"50%",color:"white",fontSize:10,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}>
+                      ×
+                    </button>
+                  )}
+                </div>
+              </div>
+            ))}
+
+            {players.length===0&&(
+              <div style={{position:"absolute",inset:0,display:"flex",alignItems:"center",justifyContent:"center",zIndex:20}}>
+                <p style={{color:"rgba(255,255,255,0.3)",fontSize:13,textAlign:"center",lineHeight:1.6}}>No players yet.<br/>Join to take a seat!</p>
+              </div>
+            )}
+          </div>
+
+          {/* Voting cards */}
+          {phase==="voting"&&(
+            <div style={{marginTop:24}}>
+              <p style={{color:"rgba(255,255,255,0.5)",fontSize:11,textAlign:"center",marginBottom:12,textTransform:"uppercase",letterSpacing:"0.05em"}}>
+                {myVote!==null?`Your pick: ${myVote} — click to change`:"Pick your card"}
+              </p>
+              <div style={{display:"flex",gap:8,flexWrap:"wrap",justifyContent:"center"}}>
+                {FIBONACCI.map(v=>(
+                  <div key={v} onClick={()=>handleVote(v)} style={{cursor:"pointer"}}>
+                    <PlayingCard value={v} flipped={false} size="md" selected={myVote===v}/>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Results */}
+          {phase==="revealed"&&(
+            <div style={{marginTop:24,width:"100%",display:"flex",justifyContent:"center"}}>
+              {isFacilitator
+                ?<Results players={players} onFinalPoint={handleFinalPoint} storyNum={storyNum}/>
+                :<div style={{color:"rgba(255,255,255,0.5)",fontSize:13,textAlign:"center"}}>Waiting for facilitator to lock in points...</div>
+              }
+            </div>
+          )}
+
+          {/* End session */}
+          {isFacilitator&&currentSession.stories.length>0&&phase==="waiting"&&(
+            <button className="btn" onClick={endSession}
+              style={{marginTop:16,fontSize:12,color:"rgba(255,255,255,0.4)",border:"1px solid rgba(255,255,255,0.1)",
+                padding:"8px 16px",borderRadius:8,background:"transparent",cursor:"pointer"}}>
+              🏁 End Session & Save
+            </button>
+          )}
+        </div>
+
+        {/* Sidebar */}
+        {currentSession.stories.length>0&&(
+          <div style={{width:176,display:"flex",flexDirection:"column",gap:8,overflowY:"auto"}}>
+            <div style={{color:"rgba(250,204,21,0.8)",fontSize:11,textTransform:"uppercase",letterSpacing:"0.05em",fontWeight:700}}>This Session</div>
+            {currentSession.stories.map((s,i)=>(
+              <div key={i} style={{background:"rgba(0,0,0,0.3)",border:"1px solid rgba(255,255,255,0.1)",borderRadius:12,padding:10,color:"white"}}>
+                <div style={{color:"rgba(255,255,255,0.5)",fontSize:11}}>Story #{i+1}</div>
+                <div style={{color:"#facc15",fontWeight:900,fontSize:18,lineHeight:1}}>{s.finalPoint} <span style={{color:"rgba(255,255,255,0.4)",fontSize:11,fontWeight:400}}>pts</span></div>
+                <div style={{color:"rgba(255,255,255,0.3)",fontSize:11,marginTop:2}}>{s.votes?.join(", ")}</div>
+              </div>
+            ))}
+            <div style={{background:"rgba(250,204,21,0.1)",border:"1px solid rgba(250,204,21,0.3)",borderRadius:12,padding:10,color:"white"}}>
+              <div style={{color:"rgba(250,204,21,0.6)",fontSize:11}}>Total</div>
+              <div style={{color:"#facc15",fontWeight:900,fontSize:22}}>{currentSession.stories.reduce((s,st)=>s+(Number(st.finalPoint)||0),0)} pts</div>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+</script>
+</body>
+</html>
